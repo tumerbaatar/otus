@@ -1,6 +1,6 @@
 resolvers += "Spark Packages Repo" at "http://dl.bintray.com/spark-packages/maven"
 
-name := "json_reader_Shavrov"
+name := "boston_crime_shavrov"
 
 version := "0.0.1"
 
