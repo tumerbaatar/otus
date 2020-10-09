@@ -1,9 +1,10 @@
 package com.example
 
+import com.example.BostonCrimes.{CRIMES_TOTAL, DISTRICT, INCIDENT_NUMBER}
 import org.scalatest.FunSpec
 import org.apache.spark.sql.functions._
 import com.github.mrpowers.spark.fast.tests.DataFrameComparer
-import org.apache.spark.sql.types.{StructField, StructType, StringType}
+import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.sql.Row
 
 class AnalyzeBostonCrimesSpec
@@ -13,7 +14,7 @@ class AnalyzeBostonCrimesSpec
 
   import spark.implicits._
 
-  describe(".happyData") {
+  describe("Boston crimes analyze") {
 
     it("appends a happy column to a DataFrame") {
       val crimesPath = getAbsolutePath("/kaggle/crimes/crime.csv")
@@ -23,8 +24,11 @@ class AnalyzeBostonCrimesSpec
 
       new AnalyzeBostonCrimes(crimesPath, offenseCodesPath, outputPath).process()
 
-      val actualDF = spark.read.parquet(outputPath)
-      val expectedDF = spark.read.csv(outputPath)
+//      val actualDF = spark.read.parquet(crimesPath)
+//      val expectedDF = spark.read.csv(outputPath)
+//      expectedDF.show()
+
+//      actualDF
 
 //      assertSmallDataFrameEquality(actualDF, expectedDF)
     }
