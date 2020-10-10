@@ -1,58 +1,67 @@
 package com.example
 
-import com.example.BostonCrimes.{CRIMES_TOTAL, DISTRICT, INCIDENT_NUMBER, YEAR_MONTH, dateFormatYearMonth}
+import com.example.BostonCrimes._
 import org.apache.spark.sql.expressions.Window
-import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 
-object BostonCrimes {
-  val dateFormatYearMonth = "yyyy-MM"
-  val DISTRICT = "DISTRICT"
-  val INCIDENT_NUMBER = "INCIDENT_NUMBER"
-  val YEAR_MONTH = "YEAR_MONTH"
-  val CRIMES_TOTAL = "CRIMES_TOTAL"
-  val CRIMES_MONTHLY = "CRIMES_MONTHLY"
-}
 
 class AnalyzeBostonCrimes(crimesPath: String, offenseCodesPath: String, outputPath: String)(implicit spark: SparkSession) {
+  private val crimesDF = spark.read.option("header", "true").csv(crimesPath)
+  private val offenseCodesDF = {
+    val offenceCodesSchema = StructType(Seq(StructField("code", IntegerType), StructField("name", StringType)))
+    spark.read.schema(offenceCodesSchema).option("header", "true").csv(offenseCodesPath)
+  }
 
-  private def crimes: DataFrame = {
-    val crimesDF = spark.read.option("header", "true").csv(crimesPath)
-    val offenseCodesDF = spark.read.option("header", "true").csv(offenseCodesPath)
+  private val crimesTotal = crimesDF
+    .groupBy(DISTRICT)
+    .agg(
+      count(INCIDENT_NUMBER).as(CRIMES_TOTAL)
+    )
 
-    val crimesTotal = crimesDF
-      .groupBy(DISTRICT)
-      .agg(
-        count(INCIDENT_NUMBER).as(CRIMES_TOTAL)
-      )
+  private val crimesMonthly = crimesDF
+    .withColumn(YEAR_MONTH, to_date(col("OCCURRED_ON_DATE"), dateFormatYearMonth))
+    .groupBy(DISTRICT, YEAR_MONTH)
+    .agg(
+      count(INCIDENT_NUMBER).as("crimes_count_in_month")
+    )
+    .select(DISTRICT, "crimes_count_in_month")
+    .groupBy(DISTRICT)
+    .agg(
+      callUDF("percentile_approx", col("crimes_count_in_month"), lit(0.5)).as(CRIMES_MONTHLY)
+    )
 
-    val crimesMonthly = crimesDF
-      .withColumn(YEAR_MONTH, to_date(col("OCCURRED_ON_DATE"), dateFormatYearMonth))
-      .groupBy(DISTRICT, YEAR_MONTH)
-      .agg(
-        count(INCIDENT_NUMBER).as("crimes_count_in_month")
-      )
-      .select(DISTRICT, "crimes_count_in_month")
-      .groupBy(DISTRICT)
-      .agg(
-        callUDF("percentile_approx", col("crimes_count_in_month"), lit(0.5)).as("crimes_montly_avg")
-      )
-
+  private val frequentCrimeTypes = {
+    val crimeTypeParser = udf((offenseName: String) => offenseName.split("-").head.trim)
     val crimeTypesWindow = Window.partitionBy(DISTRICT).orderBy(col("OFFENSE_CODE_COUNT").desc)
-    val frequentCrimeTypes = crimesDF
-      .groupBy(DISTRICT, "OFFENSE_CODE")
+    crimesDF
+      .withColumn(CODE, col(OFFENSE_CODE).cast("INT"))
+      .groupBy(DISTRICT, CODE)
       .agg(
-        count("OFFENSE_CODE").as("OFFENSE_CODE_COUNT")
+        count(CODE).as("OFFENSE_CODE_COUNT")
       )
-      // TODO: withdraw offence code name as described in the task
       .withColumn("rank", dense_rank() over crimeTypesWindow)
       .where("rank <= 3")
+      .join(broadcast(offenseCodesDF), Seq(CODE), "inner")
+      .withColumn(FREQUENT_CRIME_TYPES, crimeTypeParser(col(NAME)))
+      .orderBy(DISTRICT, "rank")
+      .select(DISTRICT, "offense_code_count", "rank", FREQUENT_CRIME_TYPES)
+  }
 
-    frequentCrimeTypes.show()
-    //    crimesTotal.show()
-    //    crimesMonthly.show()
+  private val coordinates = crimesDF
+    .groupBy(DISTRICT)
+    .agg(
+      avg("lat").as("lat"),
+      avg("long").as("lng")
+    )
 
-    crimesDF
+  private def joinAggregates: DataFrame = {
+    crimesTotal
+      .join(crimesMonthly, Seq(DISTRICT), "left_outer")
+      .join(frequentCrimeTypes, Seq(DISTRICT), "left_outer")
+      .join(coordinates, Seq(DISTRICT), "left_outer")
+      .dropDuplicates()
   }
 
   private def saveResult(df: DataFrame): Unit = {
@@ -60,6 +69,6 @@ class AnalyzeBostonCrimes(crimesPath: String, offenseCodesPath: String, outputPa
   }
 
   def process(): Unit = {
-    saveResult(crimes)
+    saveResult(joinAggregates)
   }
 }
